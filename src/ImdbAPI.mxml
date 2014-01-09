@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					   xmlns:s="library://ns.adobe.com/flex/spark" 
+					   xmlns:mx="library://ns.adobe.com/flex/mx">
+	<s:layout>
+		<s:VerticalLayout horizontalAlign="left" paddingLeft="30" paddingRight="30" paddingTop="30" paddingBottom="30"/>
+	</s:layout>
+	
+	<fx:Script>
+		<![CDATA[
+			import mx.collections.ArrayList;
+			
+			[Bindable] private var pendingMovies:ArrayList = new ArrayList;
+			[Bindable] private var currentMovie:String = "";
+			[Bindable] private var failedMovies:uint = 0;
+			[Bindable] private var pendingPosters:uint = 0;
+			[Bindable] private var currentPoster:String = "";
+			[Bindable] private var failedPosters:uint = 0;
+			
+			protected function goClickHandler(event:MouseEvent):void
+			{
+				try
+				{
+					var indices:uint = (linkYear.selected ? Movie.YEAR : 0) +
+						(linkRating.selected ? Movie.RATING : 0) +
+						(linkGenre.selected ? Movie.GENRE : 0) +
+						(linkActors.selected ? Movie.ACTORS : 0) +
+						(linkDirectors.selected ? Movie.DIRECTORS : 0) +
+						(linkContent.selected ? Movie.CONTENTRATING : 0);
+					
+					var diff:uint = (caseDiff.selected ? Movie.TITLE_CASE : 0) +
+						(titleDiff.selected ? Movie.TITLE : 0) +
+						(yearDiff.selected ? Movie.YEAR : 0);
+					
+					var files:String = (fileCache.selected ? MovieLoader.IMDBXML : "") +
+						(fileURL.selected ? MovieLoader.IMDBURL : "") +
+						(fileIcon.selected ? MovieLoader.FOLDERICON : "");
+					
+					var i:File;
+					if(indices > 0)
+					{
+						i = new File(index.text);
+						i.createDirectory();
+					}
+					
+					MovieLoader.init(i, diff, indices, files);
+					
+					var s:File = new File(source.text);
+					var list:Array = s.getDirectoryListing();
+					
+					while(list.length > 0)
+						pendingMovies.addItem(new MovieLoader(list.pop()));
+				}
+				catch(e:Error)
+				{
+					log.htmlText += '<br><b><font color="#FF0000">' + e.message + '</font></b>';
+					return;
+				}
+				log.text = "";
+				processNextMovie();
+			}
+			
+			protected function processNextMovie():void
+			{
+				if(pendingMovies.length > 0)
+				{
+					var m:MovieLoader = MovieLoader(pendingMovies.getItemAt(pendingMovies.length - 1));
+					m.addEventListener(Event.COMPLETE, onMovieSuccess);
+					m.addEventListener(ErrorEvent.ERROR, onMovieFail);
+					m.addEventListener(DataEvent.DATA, onMovieInfo);
+					currentMovie = m.movie.detected.name;
+					m.fetchInfo();
+				}
+				else
+				{
+					currentMovie = "";
+				}
+			}
+			
+			protected function onMovieSuccess(event:Event):void
+			{
+				var item:MovieLoader = MovieLoader(event.target);
+				
+				pendingMovies.removeItem(item);
+				if(item.movie.diff != 0)
+					log.htmlText += '<br>' + item.movie.diffDetail;
+				callLater(processNextMovie);
+				callLater(getPoster, [item]);
+			}
+			
+			protected function onMovieFail(event:ErrorEvent):void
+			{
+				failedMovies++;
+				var item:MovieLoader = event.target as MovieLoader;
+				pendingMovies.removeItem(item);
+				log.htmlText += '<br><b><font color="#FF0000">' + item.movie.detected.name + " == " + event.text + "</font></b>";
+				processNextMovie();
+			}
+			
+			protected function onMovieInfo(event:DataEvent):void
+			{
+				log.htmlText += '<br><font color="#9999AA">' + event.data + '<font>';
+			}
+			
+			protected function getPoster(movieDelegate:MovieLoader):void
+			{
+				pendingPosters++;
+				var p:PosterLoader = new PosterLoader(movieDelegate.folder, movieDelegate.movie);
+				p.addEventListener(ErrorEvent.ERROR, onPosterFail);
+				p.addEventListener(Event.COMPLETE, onPosterComplete);
+				currentPoster = p.movie.parsed.posterUrl;
+				p.fetchPoster();
+			}
+			
+			protected function onPosterComplete(event:Event):void
+			{
+				pendingPosters--;
+				if(pendingPosters == 0)
+					currentPoster = "";
+			}
+			
+			protected function onPosterFail(event:ErrorEvent):void
+			{
+				onPosterComplete(event);
+				failedPosters++;
+				var item:PosterLoader = PosterLoader(event.target);
+				log.htmlText += '<br><b><font color="#FF0000">' + item.movie.detected.name + " (" + item.movie.parsed.posterUrl + ") == " + event.text + "</font></b>";
+			}
+			
+			protected function browseClickHandler(event:MouseEvent):void
+			{
+				var target:TextInput = (event.target == browseSource) ? source : index;
+				var f:File = new File(target.text);
+				f.addEventListener(Event.SELECT, onFolderSelection);
+				f.browseForDirectory("Select a folder");
+				
+				function onFolderSelection(e:Event):void
+				{
+					target.text = File(e.target).nativePath;
+				}
+			}
+			
+			protected function stopClickHandler(event:MouseEvent):void
+			{
+				pendingMovies.removeAll();
+			}
+			
+			protected function deleteSymLinks(event:MouseEvent):void
+			{
+				MovieLoader.deleteIndices();
+			}
+			
+			protected function deleteGeneratedFiles(event:MouseEvent):void
+			{
+				FSUtils.deleteFile(MovieLoader.IMDBURL, new File(source.text).nativePath, true);
+				FSUtils.deleteFile(MovieLoader.FOLDERICON, new File(source.text).nativePath, true, "s");
+			}
+			
+			protected function deleteDownloadedFiles(event:MouseEvent):void
+			{
+				FSUtils.deleteFile(MovieLoader.IMDBXML, new File(source.text).nativePath);
+				FSUtils.deleteFile(PosterLoader.POSTERJPG, new File(source.text).nativePath);
+			}
+		]]>
+	</fx:Script>
+	
+	<fx:Declarations>
+	</fx:Declarations>
+	
+	<s:VGroup enabled="{pendingMovies.length == 0}" width="100%">
+		<s:HGroup verticalAlign="middle" width="100%">
+			<s:Label text="Source Folder" width="100"/>
+			<s:Button label="Browse" id="browseSource" click="browseClickHandler(event)"/>
+			<s:TextInput id="source" text="F:\Movies - English" width="100%"/>
+		</s:HGroup>
+		<s:HGroup verticalAlign="middle" width="100%">
+			<s:Label text="Index Folder" width="100"/>
+			<s:Button label="Browse" id="browseIndex" click="browseClickHandler(event)"/>
+			<s:TextInput id="index" text="F:\Movies - Sorted" width="100%"/>
+		</s:HGroup>
+		<s:HGroup verticalAlign="middle">
+			<s:Label width="100" text="Rename"/>
+			<s:CheckBox label="Title Case" id="caseDiff" selected="true"/>
+			<s:CheckBox label="Title" id="titleDiff"/>
+			<s:CheckBox label="Year" id="yearDiff"/>
+		</s:HGroup>
+		<s:HGroup verticalAlign="middle">
+			<s:Label width="100" text="Symlinks"/>
+			<s:CheckBox label="Year" selected="true" id="linkYear"/>
+			<s:CheckBox label="Rating" selected="true" id="linkRating"/>
+			<s:CheckBox label="Genre" selected="true" id="linkGenre"/>
+			<s:CheckBox label="Actors" selected="false" id="linkActors"/>
+			<s:CheckBox label="Directors" selected="false" id="linkDirectors"/>
+			<s:CheckBox label="Content Rating" selected="false" id="linkContent"/>
+		</s:HGroup>
+		<s:HGroup verticalAlign="middle">
+			<s:Label width="100" text="Files"/>
+			<s:CheckBox label="Cache XML" selected="true" id="fileCache"/>
+			<s:CheckBox label="IMDB Shortcut" selected="true" id="fileURL"/>
+			<s:CheckBox label="Folder Icon" selected="false" id="fileIcon"/>
+		</s:HGroup>
+	</s:VGroup>
+	<s:HGroup verticalAlign="middle">
+		<s:Button width="100" label="{pendingMovies.length &gt; 0 ? 'Stop' : 'Go'}"
+				  click="{pendingMovies.length &gt; 0 ? stopClickHandler(event) : goClickHandler(event)}"/>
+		</s:HGroup>
+	<s:HGroup verticalAlign="middle">
+		<s:Label text="Movies:"/>
+		<s:Label text="{'Pending: ' + pendingMovies.length}"/>
+		<s:Label text="{'Failed: ' + failedMovies}"/>
+		<s:Label text="{'Now processing: ' + currentMovie}" width="100%"/>
+		</s:HGroup>
+	<s:HGroup verticalAlign="middle">
+		<s:Label text="Posters:"/>
+		<s:Label text="{'Pending: ' + pendingPosters}"/>
+		<s:Label text="{'Failed:' + failedPosters}"/>
+		<s:Label text="{'Now processing: ' + currentPoster}" width="100%"/>
+	</s:HGroup>
+	<mx:TextArea selectable="true" editable="false" width="100%" height="100%" id="log"/>
+	<s:HGroup verticalAlign="middle" enabled="{pendingMovies.length == 0}" width="100%">
+		<s:Label width="100" text="Cleanup"/>
+		<s:Button label="SymLinks" click="deleteSymLinks(event)"/>
+		<s:Button label="Created Files" click="deleteGeneratedFiles(event)"/>
+		<s:Button label="Downloaded Files" click="deleteDownloadedFiles(event)"/>
+	</s:HGroup>
+	
+</s:WindowedApplication>
